@@ -18,9 +18,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 async fn main() {
     fs::create_dir_all("uploads").unwrap();
 
+    // 404 handler
     let app = Router::new()
         .route("/", get(health_check))
-        .route("/upload", put(upload_file));
+        .route("/upload", put(upload_file))
+        .route("/upload", get(list_upload));
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -62,4 +65,18 @@ async fn upload_file(
     };
 
     Ok(StatusCode::CREATED)
+}
+
+#[tracing::instrument]
+async fn list_upload() -> impl IntoResponse {
+    let files: Vec<String> = match fs::read_dir("uploads") {
+        Ok(files) => files
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect(),
+        _ => {
+            return axum::Json(Vec::new());
+        }
+    };
+    axum::Json(files)
 }
