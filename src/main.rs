@@ -22,7 +22,8 @@ async fn main() {
     let app = Router::new()
         .route("/", get(health_check))
         .route("/upload", put(upload_file))
-        .route("/upload", get(list_upload));
+        .route("/upload", get(list_upload))
+        .fallback(handler_404);
 
     tracing_subscriber::registry()
         .with(
@@ -38,18 +39,17 @@ async fn main() {
 }
 
 // health check
-#[tracing::instrument]
 async fn health_check() -> impl IntoResponse {
-    tracing::info!("");
+    tracing::info!("GET /");
     StatusCode::OK
 }
 
 // upload file
-#[tracing::instrument]
 async fn upload_file(
     Query(query): Query<HashMap<String, String>>,
     body: Bytes,
 ) -> impl IntoResponse {
+    tracing::info!("PUT /upload");
     let filename = match query.get("filename") {
         Some(filename) => filename,
         _ => return Err(StatusCode::BAD_REQUEST),
@@ -67,8 +67,8 @@ async fn upload_file(
     Ok(StatusCode::CREATED)
 }
 
-#[tracing::instrument]
 async fn list_upload() -> impl IntoResponse {
+    tracing::info!("GET /upload");
     let files: Vec<String> = match fs::read_dir("uploads") {
         Ok(files) => files
             .filter_map(Result::ok)
@@ -79,4 +79,10 @@ async fn list_upload() -> impl IntoResponse {
         }
     };
     axum::Json(files)
+}
+
+// 404 handler
+async fn handler_404() -> impl IntoResponse {
+    tracing::info!("404 Not Found");
+    StatusCode::NOT_FOUND
 }
