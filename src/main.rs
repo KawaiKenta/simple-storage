@@ -6,7 +6,7 @@ use std::{
 
 use axum::{
     body::Bytes,
-    extract::Query,
+    extract::{Multipart, Query},
     http::{self, StatusCode},
     response::IntoResponse,
     routing::{get, put},
@@ -22,6 +22,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(health_check))
         .route("/upload", put(upload_file))
+        .route("/upload/mul", put(upload_mul))
         .route("/upload", get(list_upload))
         .route("/download", get(download))
         .fallback(handler_404);
@@ -51,6 +52,7 @@ async fn upload_file(
     body: Bytes,
 ) -> impl IntoResponse {
     tracing::info!("PUT /upload");
+
     let filename = match query.get("filename") {
         Some(filename) => filename,
         _ => return Err(StatusCode::BAD_REQUEST),
@@ -90,6 +92,7 @@ async fn handler_404() -> impl IntoResponse {
 }
 
 // download file
+// FIXME: like send_from_directory in flask, c.File(filePath)
 async fn download(query: Query<HashMap<String, String>>) -> impl IntoResponse {
     tracing::info!("GET /download");
     let filename = match query.get("filename") {
@@ -105,4 +108,33 @@ async fn download(query: Query<HashMap<String, String>>) -> impl IntoResponse {
         http::HeaderValue::from_str(&format!("attachment; filename={}", filename)).unwrap(),
     );
     Ok((StatusCode::OK, body))
+}
+
+async fn upload_mul(mut multipart: Multipart) -> impl IntoResponse {
+    tracing::info!("PUT /upload");
+    let field = match multipart.next_field().await.unwrap() {
+        Some(field) => field,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let name = field.name().unwrap().to_string();
+    let file_name = field.file_name().unwrap().to_string();
+    let content_type = field.content_type().unwrap().to_string();
+    let data = field.bytes().await.unwrap();
+    tracing::info!(
+        "Length of `{name}` (`{file_name}`: `{content_type}`) is {} bytes",
+        data.len()
+    );
+
+    let upload_path = format!("uploads/{}", file_name);
+    let mut file = match File::create(upload_path) {
+        Ok(file) => file,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    if file.write_all(&data).is_err() || file.flush().is_err() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+
+    Ok(StatusCode::CREATED)
 }
