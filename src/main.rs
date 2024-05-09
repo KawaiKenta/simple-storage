@@ -1,13 +1,13 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::Write,
+    io::{Read, Write},
 };
 
 use axum::{
     body::Bytes,
     extract::Query,
-    http::StatusCode,
+    http::{self, StatusCode},
     response::IntoResponse,
     routing::{get, put},
     Router,
@@ -23,6 +23,7 @@ async fn main() {
         .route("/", get(health_check))
         .route("/upload", put(upload_file))
         .route("/upload", get(list_upload))
+        .route("/download", get(download))
         .fallback(handler_404);
 
     tracing_subscriber::registry()
@@ -67,6 +68,7 @@ async fn upload_file(
     Ok(StatusCode::CREATED)
 }
 
+// list uploaded files
 async fn list_upload() -> impl IntoResponse {
     tracing::info!("GET /upload");
     let files: Vec<String> = match fs::read_dir("uploads") {
@@ -85,4 +87,22 @@ async fn list_upload() -> impl IntoResponse {
 async fn handler_404() -> impl IntoResponse {
     tracing::info!("404 Not Found");
     StatusCode::NOT_FOUND
+}
+
+// download file
+async fn download(query: Query<HashMap<String, String>>) -> impl IntoResponse {
+    tracing::info!("GET /download");
+    let filename = match query.get("filename") {
+        Some(filename) => filename,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    let upload_path = format!("uploads/{}", filename);
+    let body = fs::read(upload_path).unwrap();
+    // set header
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::CONTENT_DISPOSITION,
+        http::HeaderValue::from_str(&format!("attachment; filename={}", filename)).unwrap(),
+    );
+    Ok((StatusCode::OK, body))
 }
