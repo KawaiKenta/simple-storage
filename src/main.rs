@@ -1,17 +1,26 @@
-use axum::{response::IntoResponse, routing::get, Json, Router};
-use serde::Serialize;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+    io::Write,
+};
 
-#[derive(Serialize)]
-struct User {
-    id: u64,
-    username: String,
-}
+use axum::{
+    body::Bytes,
+    extract::Query,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, put},
+    Router,
+};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let app = Router::new().route("/", get(hello));
+    fs::create_dir_all("uploads").unwrap();
 
+    let app = Router::new()
+        .route("/", get(health_check))
+        .route("/upload", put(upload_file));
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -25,13 +34,32 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+// health check
 #[tracing::instrument]
-async fn hello() -> impl IntoResponse {
-    let me = User {
-        id: 42,
-        username: "foo".to_string(),
+async fn health_check() -> impl IntoResponse {
+    tracing::info!("");
+    StatusCode::OK
+}
+
+// upload file
+#[tracing::instrument]
+async fn upload_file(
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let filename = match query.get("filename") {
+        Some(filename) => filename,
+        _ => return Err(StatusCode::BAD_REQUEST),
     };
-    tracing::info!("hello from {}", me.username);
-    let response: Vec<User> = vec![me];
-    Json(response)
+    let upload_path = format!("uploads/{}", filename);
+    let mut file = match File::create(upload_path) {
+        Ok(file) => file,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    if file.write_all(&body).is_err() || file.flush().is_err() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+
+    Ok(StatusCode::CREATED)
 }
