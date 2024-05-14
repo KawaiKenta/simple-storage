@@ -96,12 +96,8 @@ async fn upload(mut multipart: Multipart) -> impl IntoResponse {
 
     let name = field.name().unwrap().to_string();
     let file_name = field.file_name().unwrap().to_string();
-    let content_type = field.content_type().unwrap().to_string();
     let data = field.bytes().await.unwrap();
-    tracing::info!(
-        "Length of `{name}` (`{file_name}`: `{content_type}`) is {} bytes",
-        data.len()
-    );
+    tracing::info!("Length of `{name}` (`{file_name}`) is {} bytes", data.len());
 
     let upload_path = format!("uploads/{}", file_name);
     let mut file = match File::create(upload_path) {
