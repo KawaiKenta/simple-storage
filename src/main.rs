@@ -5,13 +5,16 @@ use std::{
 };
 
 use axum::{
+    body::Bytes,
     extract::{Multipart, Query},
     http::{self, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use serde::Serialize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use uuid::Uuid;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -94,20 +97,34 @@ async fn upload(mut multipart: Multipart) -> impl IntoResponse {
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 
-    let name = field.name().unwrap().to_string();
-    let file_name = field.file_name().unwrap().to_string();
-    let data = field.bytes().await.unwrap();
-    tracing::info!("Length of `{name}` (`{file_name}`) is {} bytes", data.len());
+    let mut data = field.bytes().await.unwrap();
+    let uuid = Uuid::new_v4().simple().to_string();
 
-    let upload_path = format!("uploads/{}", file_name);
+    let upload_path = format!("uploads/{}", uuid);
     let mut file = match File::create(upload_path) {
         Ok(file) => file,
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 
+    // 1/2の確率で中身を改竄する
+    let temper = rand::random::<bool>();
+    match temper {
+        true => {
+            tracing::info!("😈 The file is tempered!");
+            let additonal_data = Bytes::from("Some additonal data");
+            data = [data, additonal_data].concat().into();
+        }
+        false => {
+            tracing::info!("👼 The file is not tempered!");
+        }
+    }
+
     if file.write_all(&data).is_err() || file.flush().is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
-
-    Ok(StatusCode::CREATED)
+    #[derive(Serialize)]
+    struct Response {
+        upload_path: String,
+    }
+    Ok((StatusCode::CREATED, Json(Response { upload_path: uuid })))
 }
