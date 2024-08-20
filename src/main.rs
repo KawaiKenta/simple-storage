@@ -9,8 +9,7 @@ use axum::{
     extract::{Multipart, Query},
     http::{self, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
-    Json, Router,
+    routing::{get, post}, Json, Router,
 };
 use serde::Serialize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -23,9 +22,9 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(health_check))
-        .route("/upload", post(upload))
         .route("/list", get(list_upload))
         .route("/download", get(download))
+        .route("/upload", post(upload))
         .fallback(handler_404);
 
     // logging
@@ -97,14 +96,8 @@ async fn upload(mut multipart: Multipart) -> impl IntoResponse {
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 
+    let _file_name = field.file_name().unwrap().to_string();
     let mut data = field.bytes().await.unwrap();
-    let uuid = Uuid::new_v4().simple().to_string();
-
-    let upload_path = format!("uploads/{}", uuid);
-    let mut file = match File::create(upload_path) {
-        Ok(file) => file,
-        _ => return Err(StatusCode::BAD_REQUEST),
-    };
 
     // 1/2の確率で中身を改竄する
     let temper = rand::random::<bool>();
@@ -119,6 +112,14 @@ async fn upload(mut multipart: Multipart) -> impl IntoResponse {
         }
     }
 
+    let uuid = Uuid::new_v4().simple().to_string();
+
+    let upload_path = format!("uploads/{}", uuid);
+    let mut file = match File::create(upload_path) {
+        Ok(file) => file,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
     if file.write_all(&data).is_err() || file.flush().is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
@@ -126,5 +127,6 @@ async fn upload(mut multipart: Multipart) -> impl IntoResponse {
     struct Response {
         upload_path: String,
     }
+    tracing::info!("upload_path: {}", uuid);
     Ok((StatusCode::CREATED, Json(Response { upload_path: uuid })))
 }
