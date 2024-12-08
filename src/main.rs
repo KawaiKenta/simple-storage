@@ -1,3 +1,5 @@
+pub mod database;
+
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -5,27 +7,32 @@ use std::{
 };
 
 use axum::{
-    body::Bytes,
-    extract::{Multipart, Query},
+    extract::{Multipart, Query, State},
     http::{self, StatusCode},
     response::IntoResponse,
-    routing::{get, post}, Json, Router,
+    routing::{get, post},
+    Json, Router,
 };
 use serde::Serialize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
+const UPLOAD_DIR: &str = "uploads";
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     // initializing step
-    fs::create_dir_all("uploads").unwrap();
+    fs::create_dir_all(UPLOAD_DIR).unwrap();
+
+    let database = database::DeployedMerchandise::new();
 
     let app = Router::new()
         .route("/", get(health_check))
         .route("/list", get(list_upload))
         .route("/download", get(download))
         .route("/upload", post(upload))
-        .fallback(handler_404);
+        .fallback(handler_404)
+        .with_state(database);
 
     // logging
     tracing_subscriber::registry()
@@ -50,7 +57,7 @@ async fn health_check() -> impl IntoResponse {
 // list uploaded files
 async fn list_upload() -> impl IntoResponse {
     tracing::info!("GET /upload");
-    let files: Vec<String> = match fs::read_dir("uploads") {
+    let files: Vec<String> = match fs::read_dir(UPLOAD_DIR) {
         Ok(files) => files
             .filter_map(Result::ok)
             .filter_map(|entry| entry.file_name().into_string().ok())
@@ -69,14 +76,28 @@ async fn handler_404() -> impl IntoResponse {
 }
 
 // download file
-async fn download(query: Query<HashMap<String, String>>) -> impl IntoResponse {
+async fn download(
+    State(db): State<database::DeployedMerchandise>,
+    query: Query<HashMap<String, String>>,
+) -> impl IntoResponse {
     tracing::info!("GET /download");
-    let filename = match query.get("filename") {
-        Some(filename) => filename,
+    let key = match query.get("key") {
+        Some(key) => key,
         _ => return Err(StatusCode::BAD_REQUEST),
     };
-    let upload_path = format!("uploads/{}", filename);
-    let body = match fs::read(upload_path) {
+    let file_path = match db.get(key).await {
+        Some(path) => path,
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+    let file_name = match file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(String::from)
+    {
+        Some(name) => name,
+        _ => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    let body = match fs::read(file_path) {
         Ok(body) => body,
         _ => return Err(StatusCode::NOT_FOUND),
     };
@@ -84,45 +105,50 @@ async fn download(query: Query<HashMap<String, String>>) -> impl IntoResponse {
     let mut headers = http::HeaderMap::new();
     headers.insert(
         http::header::CONTENT_DISPOSITION,
-        http::HeaderValue::from_str(&format!("attachment; filename={}", filename)).unwrap(),
+        http::HeaderValue::from_str(&format!("attachment; filename={}", file_name)).unwrap(),
     );
     Ok((headers, body))
 }
 
-async fn upload(mut multipart: Multipart) -> impl IntoResponse {
-    tracing::info!("PUT /upload");
+async fn upload(
+    State(db): State<database::DeployedMerchandise>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    tracing::info!("POST /upload");
     let field = match multipart.next_field().await.unwrap() {
         Some(field) => field,
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 
-    let _file_name = field.file_name().unwrap().to_string();
-    let mut data = field.bytes().await.unwrap();
+    let file_name = field.file_name().unwrap().to_string();
+    let data = field.bytes().await.unwrap();
 
     // 1/2の確率で中身を改竄する
-    let temper = rand::random::<bool>();
-    match temper {
-        true => {
-            tracing::info!("😈 The file is tempered!");
-            let additonal_data = Bytes::from("Some additonal data");
-            data = [data, additonal_data].concat().into();
-        }
-        false => {
-            tracing::info!("👼 The file is not tempered!");
-        }
-    }
-
-    let uuid = Uuid::new_v4().simple().to_string();
-
-    let upload_path = format!("uploads/{}", uuid);
-    let mut file = match File::create(upload_path) {
+    // let temper = rand::random::<bool>();
+    // match temper {
+    //     true => {
+    //         tracing::info!("😈 The file is tempered!");
+    //         let additonal_data = Bytes::from("Some additonal data");
+    //         data = [data, additonal_data].concat().into();
+    //     }
+    //     false => {
+    //         tracing::info!("👼 The file is not tempered!");
+    //     }
+    // }
+    let upload_path = format!("{}/{}", UPLOAD_DIR, file_name);
+    let mut file = match File::create(upload_path.clone()) {
         Ok(file) => file,
         _ => return Err(StatusCode::BAD_REQUEST),
     };
-
     if file.write_all(&data).is_err() || file.flush().is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
+    let uuid = Uuid::new_v4().simple().to_string();
+
+    let path_buf = std::path::PathBuf::from(upload_path);
+
+    db.insert(uuid.clone(), path_buf).await;
+
     #[derive(Serialize)]
     struct Response {
         upload_path: String,
