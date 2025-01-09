@@ -7,7 +7,7 @@ use std::{
 };
 
 use axum::{
-    extract::{Multipart, Query, State},
+    extract::{Multipart, Query, State, DefaultBodyLimit},
     http::{self, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -31,6 +31,7 @@ async fn main() {
         .route("/list", get(list_upload))
         .route("/download", get(download))
         .route("/upload", post(upload))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .fallback(handler_404)
         .with_state(database);
 
